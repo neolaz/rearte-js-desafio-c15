@@ -36,11 +36,12 @@ const calcularTotal = (listaDocumentoDetalle) => {
 }
 
 class Producto{
-    constructor (id, nombre, precio, impuesto){
+    constructor (id, nombre, precio, impuesto, stock){
         this.id = id;
         this.nombre = nombre;
         this.precio = precio;
         this.impuesto = impuesto;
+        this.stock = stock;
     }
 }
 
@@ -64,15 +65,13 @@ class DocumentoDetalle{
 }
 
 const obtenerProductos = async () => {
-    const resp = await fetch("./data.json", {mode: 'no-cors'}); // Tuve que agregar ese parámetro para que me dejara hacerle fetch al archivo json, sino tiraba error.
-    console.log(resp);
-    // const post = await resp.json();
-    
-    return post;
+    const resp = await fetch("./data.json"); 
+    const post = await resp.json();
+
+    localStorage.setItem('productos', JSON.stringify(post));
 }
 
-let productos = [new Producto(1, 'Microfono', 25000, 21), new Producto(2, 'Monitor', 80000, 0), new Producto(3, 'Mouse', 20000, 21), new Producto(4, 'Parlantes', 50000, 27), new Producto(5, 'Teclado', 30000, 0)];
-// let productos = obtenerProductos();
+obtenerProductos();
 
 // Ordena los documentos por tres criterios distintos simultáneamente: Tipo de Documento, Centro Emisor y Número.
 const ordernarDocumentos = () => {
@@ -225,6 +224,26 @@ const validarNumero = (msgError) => {
     return msgError;
 }
 
+// Valida que no se estén facturando más productos de los que se tienen en stock.
+const validarStock = (msgError) => {
+    let productos = JSON.parse(localStorage.getItem('productos')) || [];
+    let stockEnUso;
+
+    productos.forEach( (p) => {
+        stockEnUso = 0;
+
+        for (let i = 1; i < 6; i++) {
+            cantidadInput = document.getElementById(`cantidad${i}`).value;
+            productoInput = document.getElementById(`producto${i}`).value;
+            if(p.id == productoInput && cantidadInput > 0){
+                stockEnUso += parseInt(cantidadInput);
+            }
+        }
+        if(stockEnUso > p.stock) msgError += `No hay suficiente stock de ${p.nombre}. Hay ${p.stock} unidades en stock y está intentando cargar ${stockEnUso} en el Documento.\n`;
+    })
+    return msgError;
+}
+
 // Valida que se haya cargado correctamente el detalle del Documento.
 const validarDetalle = (msgError) => {
     let cantidadInput;
@@ -247,6 +266,9 @@ const validarDetalle = (msgError) => {
 
         if(cantidadInput > 0 && productoInput != "") algunaLineaCargada = true;
     }
+
+    if(algunaLineaCargada) msgError = validarStock(msgError);
+
     if (!algunaLineaCargada) msgError += 'Ingrese alguna línea del detalle\n';
     return msgError
 }
@@ -298,6 +320,7 @@ const asignarNumero = (tipoDocumento, centroEmisor) => {
 
 // Crea el detalle del Documento.
 const crearDetalle = () => {
+    let productos = JSON.parse(localStorage.getItem('productos')) || [];
     let cantidadInput;
     let productoInput;
     let documentoDetalle;
@@ -308,16 +331,24 @@ const crearDetalle = () => {
         productoInput = document.getElementById(`producto${i}`).value;
 
         if (cantidadInput > 0 && productoInput != ""){
-            productoInput -= 1;
-            documentoDetalle = new DocumentoDetalle(productos[productoInput], cantidadInput);
-            listaDocumentoDetalle.push(documentoDetalle);
+            productos.forEach( (p) => {
+                if (productoInput == p.id){
+                    p.stock -= parseInt(cantidadInput);
+                    documentoDetalle = new DocumentoDetalle(p, cantidadInput);
+                    listaDocumentoDetalle.push(documentoDetalle);
+                }
+            })
         }
     }
+
+    localStorage.setItem('productos', JSON.stringify(productos));
     return listaDocumentoDetalle;
 }
 
 // Reinicia el form dejando todos los inputs en vacíos.
 const reinciarForm = () => {
+    let productos = JSON.parse(localStorage.getItem('productos')) || [];
+
     clientElement.value = '';
     clientElement.disabled = false;
     clientElement.style.backgroundColor = "#403f3f";
@@ -332,6 +363,22 @@ const reinciarForm = () => {
     centroEmisorElement.style.color = "#ffffff";
     numeroElement.innerHTML = '00000000';
     totalElement.innerHTML = 0;
+
+    // Resto el stock si se estaba modificando el Documento
+    if(modo == 'upd'){
+        let listaDocumentos = JSON.parse(localStorage.getItem('listaDocumentos')) || [];
+        let documentosFiltrados = listaDocumentos.filter( (d) => d.id == idEnUso);
+        let documento = documentosFiltrados[0];
+
+        documento.listaDocumentoDetalle.forEach( (det) => {
+            productos.forEach( (p) => {
+                if (det.producto.id == p.id){
+                    p.stock -= parseInt(det.cantidad);
+                }
+            })
+        });   
+        localStorage.setItem('productos', JSON.stringify(productos));
+    }
 
     for (let i = 1; i < 6; i++) {
         document.getElementById(`cantidad${i}`).value = 0;
@@ -420,6 +467,18 @@ const crearDocumento = () => {
 // Modifica el documento con los datos cargados en pantalla.
 const modificarDocumento = (id) => {
     let listaDocumentos = JSON.parse(localStorage.getItem('listaDocumentos')) || [];
+    let productos = JSON.parse(localStorage.getItem('productos')) || [];
+    let documentosFiltrados = listaDocumentos.filter( (d) => d.id == id);
+    let documento = documentosFiltrados[0];
+
+    documento.listaDocumentoDetalle.forEach( (det) => {
+        productos.forEach( (p) => {
+            if (det.producto.id == p.id){
+                p.stock += parseInt(det.cantidad);
+            }
+        })
+    });   
+
     let listaDocumentoDetalle = crearDetalle();
 
     if(listaDocumentos != null){
@@ -431,6 +490,7 @@ const modificarDocumento = (id) => {
         });
         localStorage.setItem('listaDocumentos', JSON.stringify(listaDocumentos));
         mostrarListadoDocumentos();
+        modo = 'ins';
         reinciarForm(); 
     }
 }
@@ -466,10 +526,28 @@ const gestionarVisualizarDocumento = (id) => {
 
 // Setea la pantalla para modificar el Documento. Todos los campos estarán como readonly salvo el detalle, será lo único que se podra modificar. La cabecera no puede modificarse.
 const gestionarModificarDocumento = (id) => {
+    let listaDocumentos = JSON.parse(localStorage.getItem('listaDocumentos')) || [];
+    let productos = JSON.parse(localStorage.getItem('productos')) || [];
+    
     reinciarForm();
     idEnUso = id;
     modo = 'upd';
     mostrarDocumento(id);
+
+    // Reasigno el stock
+    listaDocumentos.forEach( (d) => {
+        if(d.id == id){
+            d.listaDocumentoDetalle.forEach( (det) => {
+                productos.forEach( (p) => {
+                    if (det.producto.id == p.id){
+                        p.stock += parseInt(det.cantidad);
+                    }
+                })
+            });   
+        }
+    });
+
+    localStorage.setItem('productos', JSON.stringify(productos));
     clientElement.disabled = true;
     clientElement.style.backgroundColor = "#2f2f2f";
     clientElement.style.color = "#c6c6c6";
@@ -484,6 +562,7 @@ const gestionarModificarDocumento = (id) => {
 // Eliminar el Documento.
 const eliminarDocumento = (id) => {
     let listaDocumentos = JSON.parse(localStorage.getItem('listaDocumentos')) || [];
+    let productos = JSON.parse(localStorage.getItem('productos')) || [];
     let {tipo, centroEmisor, numero } = listaDocumentos.filter(d => d.id == id)[0];
 
     Swal.fire({
@@ -498,8 +577,26 @@ const eliminarDocumento = (id) => {
         confirmButtonColor: '#30fdb0'
     }).then((result) => {
         if (result.isConfirmed) {
+            // Chequeo no estar en modo update para no reasignar dos veces el stock
+            if(modo != 'upd'){
+                // Reasigno el stock de los productos del Docuento eliminado.
+                listaDocumentos.forEach( (d) => {
+                    if(d.id == id){
+                        d.listaDocumentoDetalle.forEach( (det) => {
+                            productos.forEach( (p) => {
+                                if (det.producto.id == p.id){
+                                    p.stock += parseInt(det.cantidad);
+                                }
+                            })
+                        });   
+                    }
+                });
+            }
+            
+            modo = 'del';
             listaDocumentos = listaDocumentos.filter(d => d.id != id);
             localStorage.setItem('listaDocumentos', JSON.stringify(listaDocumentos));
+            localStorage.setItem('productos', JSON.stringify(productos));
             reinciarForm();
             mostrarListadoDocumentos();
             Swal.fire({
@@ -543,6 +640,7 @@ const gestionarNumero = () => {
 
 // Obtiene un Producto.
 const obtenerProductoPorId = (id) => {
+    let productos = JSON.parse(localStorage.getItem('productos')) || [];
     let productosFiltrados;
 
     productosFiltrados = productos.filter( (p) => p.id == id);
@@ -570,7 +668,8 @@ const gestionarLineaDetalle = (nroLinea) => {
         document.getElementById(`precio${nroLinea}`).innerHTML = precio;
         document.getElementById(`impuesto${nroLinea}`).innerHTML = impuesto;
         document.getElementById(`subtotal${nroLinea}`).innerHTML = cantidadInput * precio * (1 + impuesto / 100);
-    } else {
+    }  
+    if(cantidadInput <= 0 || productoInput == ''){
         document.getElementById(`precio${nroLinea}`).innerHTML = 0;
         document.getElementById(`impuesto${nroLinea}`).innerHTML = 0;
         document.getElementById(`subtotal${nroLinea}`).innerHTML = 0;
